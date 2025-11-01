@@ -366,6 +366,162 @@ static int VAR_DECLARATION() {
     return numVars;
 }
 
+static void STATEMENT() {
+    if (accept(identsym)) {
+        int symIdx = SYMBOLTABLECHECK(nextToken.lexeme)
+
+        if (symIdx == -1) {
+            exitAndPrint(7);
+        } if (symbol_table[symIdx].kind != 2) {
+               exitAndPrint(8);
+        }
+
+        Token nextToken = getTok();
+
+        if (nextToken.lexeme != becomessym) {
+            exitAndPrint(9);
+        }
+
+        Token nextToken = getTok();
+
+        EXPRESSION();
+
+        emit(OP_STO, 0, symbol_table[symIdx].addr);
+
+        return;
+    }
+    
+    if (accept(beginsym)) {
+        do {
+            Token nextToken = getTok();
+            STATEMENT();
+        } while (nextToken.lexeme == semicolonsym)
+
+        if (nextToken.lexeme != endsym) {
+            exitAndPrint(10)
+        }
+
+        Token nextToken = getTok();
+
+        return;
+    }
+
+    if (accept(ifsym)) {
+        Token nextToken = getTok();
+
+        CONDITION();
+
+        int jpcIdx = codeIndex;
+        emit(OP_JPC, 0, 0);
+
+        if (nextToken.lexeme != thensym) {
+            exitAndPrint(11);
+        }
+
+        Token nextToken = getTok();
+
+        STATEMENT();
+
+        code[jpcIdx].M = codeIndex;
+        
+        return;
+    }
+
+    if (accept(whilesym)) {
+        Token nextToken = getTok();
+        loopIdx = codeIndex;
+
+        CONDITION();
+
+        if (nextToken.lexeme != dosym) {
+            exitAndPrint(12);
+        }
+
+        Token nextToken = getTok();
+
+        jpcIdx = codeIndex;
+        emit(OP_JPC, 0, 0);
+
+
+        STATEMENT();
+
+        emit(OP_JMP, 0, loopIdx);
+
+        code[jpcIdx].M = codeIndex;
+
+        return;
+    }
+
+    
+    if (accept(readsym)) {
+        Token nextToken = getTok();
+
+        if (nextToken.lexeme != identsym) {
+            exitAndPrint(2);
+        }
+
+        int symIdx = SYMBOLTABLECHECK(nextToken.lexeme);
+
+        if (symIdx == -1) {
+            exitAndPrint(7);
+        } if (symbol_table[symIdx].kind != 2) {
+            exitAndPrint(8);
+        }
+
+        Token nextToken = getTok();
+
+        emit(OP_SYS, 0, 2);
+        emit(OP_STO, 0, symbol_table[symIdx].addr);
+
+        return;
+    }
+    
+    if (accept(writesym)) {
+        Token nextToken = getTok();
+        EXPRESSION();
+        emit(OP_SYS, 0, 1);
+        return;
+    }
+}
+
+static void CONDITION() {
+    if (nextToken.lexeme == oddsym) {
+        Token nextToken = getTok();
+        EXPRESSION();
+        emit(OP_OPR, 0, OPR_EVEN)
+    } else {
+        EXPRESSION();
+
+        if (nextToken.lexeme == eqlsym) {
+            Token nextToken = getTok();
+            EXPRESSION();
+            emit(OP_OPR, 0, OPR_EQL);
+        } else if (nextToken.lexeme == neqsym) {
+            Token nextToken = getTok();
+            EXPRESSION();
+            emit(OP_OPR, 0, OPR_NEQ);
+        } else if (nextToken.lexeme == lessym) {
+            Token nextToken = getTok();
+            EXPRESSION();
+            emit(OP_OPR, 0, OPR_LSS);
+        } else if (nextToken.lexeme == leqsym) {
+            Token nextToken = getTok();
+            EXPRESSION();
+            emit(OP_OPR, 0, OPR_LEQ);
+        } else if (nextToken.lexeme == gtrsym) {
+            Token nextToken = getTok();
+            EXPRESSION();
+            emit(OP_OPR, 0, OPR_GTR);
+        } else if (nextToken.lexeme == geqsym) {
+            Token nextToken = getTok();
+            EXPRESSION();
+            emit(OP_OPR, 0, OPR_GEQ);
+        } else {
+            exitAndPrint(13);
+        }
+    }
+}
+
 static void EXPRESSION() {
     TERM();
 
