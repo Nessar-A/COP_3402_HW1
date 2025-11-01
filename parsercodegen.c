@@ -2,7 +2,7 @@
 Assignment:
 HW3 - Parser and Code Generator for PL/0
 
-Author(s): <Full Name 1>, <Full Name 2>
+Author(s): Nessar Amiri, Marcelo Pacheco
 
 Language: C (only)
 
@@ -47,7 +47,7 @@ Due Date: Friday, October 31, 2025 at 11:59 PM ET
 #define ELF_FILE   "elf.txt"
 
 #define MAX_TOKENS 500
-#define MAX_CODE   10000                //
+#define MAX_CODE   10000                //Random high number (so we don't accidentally have overflow)
 #define MAX_SYMBOL_TABLE_SIZE   500
 
 // Enumeration of all possible token types for PL/0 language
@@ -222,15 +222,6 @@ static void emit(int OP, int L, int M) {
     code[codeIndex].M = M;
     codeIndex++;
 }
-/* ***********Next 6 functions are from ChatGPT ****************************/
-// Returns the next token's type, or 0 if we're out of tokens.
-static int peekType(void) {
-    if (tokenIndex < totalToken) {
-        return tokens[tokenIndex].type;
-    } else {
-        return 0;
-    }
-}
 
 // Consumes and returns the next token
 static Token getToken(void) {
@@ -244,6 +235,14 @@ static Token getToken(void) {
     }
     return t;
 }
+// Returns the next token's type, or 0 if we're out of tokens.
+static int peekType(void) {
+    if (tokenIndex < totalToken) {
+        return tokens[tokenIndex].type;
+    } else {
+        return 0;
+    }
+}
 
 // If the next token matches 'type', consume it and return 1; otherwise return 0.
 static int accept(int type) {
@@ -255,9 +254,8 @@ static int accept(int type) {
     return 0;
 }
 
-/* ============================================================
-   Symbol table ops (match Appendix E fields)
-   ============================================================ */
+//Symbol table ops
+
 static int SYMBOLTABLECHECK(const char *name) {
     int i = totalSymbols - 1;
     while (i >= 0) {
@@ -304,6 +302,7 @@ static void TERM();
 static void FACTOR();
 
 static void PROGRAM(){
+    emit(OP_JMP, 0, 3);
     BLOCK();
     if (!accept(periodsym))
         exitAndPrint(1);
@@ -366,6 +365,129 @@ static int VAR_DECLARATION() {
     return numVars;
 }
 
+static void STATEMENT() {
+    int temp = peekType();
+
+    if (temp == identsym) {
+        Token token = getToken();
+        int symIdx = SYMBOLTABLECHECK(token.lexeme);
+        if (symIdx == -1)
+            exitAndPrint(7);
+        
+        if(symbol_table[symIdx].kind != 2)
+            exitAndPrint(8);
+        
+        if(!accept(becomessym))
+            exitAndPrint(9);
+
+        EXPRESSION();
+        symbol_table[symIdx].mark = 1;
+        emit(OP_STO, 0, symbol_table[symIdx].addr);
+        return;
+    }
+
+    if (accept(beginsym)) {
+        do {
+            STATEMENT();
+        } while (accept(semicolonsym));
+
+        if(!accept(endsym))
+            exitAndPrint(10);
+        
+        return;
+    }
+
+    if (accept(ifsym)) {
+        CONDITION();
+        int jpcIdx = codeIndex;
+        emit(OP_JPC, 0, 0);
+        if (!accept(thensym))
+            exitAndPrint(11);
+
+        STATEMENT();
+        if(!accept(fisym))
+            exitAndPrint(10);
+        
+        code[jpcIdx].M = codeIndex;
+        return;
+    }
+
+    if (accept(whilesym)) {
+        int loopIdx = codeIndex;
+        CONDITION();
+        if(!accept(dosym))
+            exitAndPrint(12);
+        
+        int jpcIdx = codeIndex;
+        emit(OP_JPC, 0, 0);
+        STATEMENT();
+        emit(OP_JMP, 0, loopIdx);
+        code[jpcIdx].M = codeIndex;
+        return;
+    }
+
+    if (accept(readsym)) {
+        Token token = getToken();
+        if(token.type != identsym)
+            exitAndPrint(2);
+
+        int symIdx = SYMBOLTABLECHECK(token.lexeme);
+        if(symIdx == -1)
+            exitAndPrint(7);
+
+        if(symbol_table[symIdx].kind != 2)
+            exitAndPrint(8);
+
+        symbol_table[symIdx].mark = 1;
+        emit(OP_SYS, 0, 2);
+        emit(OP_STO, 0, symbol_table[symIdx].addr);
+        return;
+    }
+
+    if (accept(writesym)) {
+        EXPRESSION();
+        emit(OP_SYS, 0, 1);
+        return;
+    }
+}
+
+static void CONDITION() {
+    if (accept(evensym)) {
+        EXPRESSION();
+        emit(OP_OPR, 0, OPR_EVEN);
+        return;
+    }
+    
+    EXPRESSION();
+
+    if (accept(eqsym)) {
+        EXPRESSION();
+        emit(OP_OPR, 0, OPR_EQL);
+        return;
+    } else if (accept(neqsym)) {
+        EXPRESSION();
+        emit(OP_OPR, 0, OPR_NEQ);
+        return;
+    } else if (accept(lessym)) {
+        EXPRESSION();
+        emit(OP_OPR, 0, OPR_LSS);
+        return;
+    } else if (accept(leqsym)) {
+        EXPRESSION();
+        emit(OP_OPR, 0, OPR_LEQ);
+        return;
+    } else if (accept(gtrsym)) {
+        EXPRESSION();
+        emit(OP_OPR, 0, OPR_GTR);
+        return;
+    } else if (accept(geqsym)) {
+        EXPRESSION();
+        emit(OP_OPR, 0, OPR_GEQ);
+        return;
+    }
+
+    exitAndPrint(13);
+}
 static void EXPRESSION() {
     TERM();
 
@@ -426,17 +548,96 @@ static void FACTOR() {
     }
     exitAndPrint(15);
 }
-int main() {
-    FILE * input = fopen("input.txt","r");
-    FILE * output = fopen("elf.txt", "w");
 
-    if (input) {
-        printf("Successfully opened file.\n"); // TEMPORARY
-    } else {
-        printf("Failed to open input file. Did you check the input file name?\n");
-        return 0;
+
+static const char* opMnemonic(int op) {
+    switch (op) {
+        case OP_LIT: return "LIT";
+        case OP_OPR: return "OPR";
+        case OP_LOD: return "LOD";
+        case OP_STO: return "STO";
+        case OP_CAL: return "CAL";
+        case OP_INC: return "INC";
+        case OP_JMP: return "JMP";
+        case OP_JPC: return "JPC";
+        case OP_SYS: return "SYS";
+        default:     return "?";
     }
+}
 
+static void printSymbolTable(void) {
+    printf("\nSymbol Table: |n\n");
+    printf("%-7s | %-12s | %-8s | %-7s | %-7s | %-5s\n",
+            "Kind", "Name", "Val", "Level", "Addr", "Mark");
+    printf("------------------------------------------------------------\n");
+    for (int i = 0; i < totalSymbols; i++) {
+        printf("%-7d | %-12s | %-8d | %-7d | %-7d | %-5d\n",
+               symbol_table[i].kind,          
+               symbol_table[i].name,
+               symbol_table[i].val,
+               symbol_table[i].level,
+               symbol_table[i].addr,
+               symbol_table[i].mark);
+    }
+}
 
+static void printAssembly(void) {
+    printf("Assembly Code\n\n");
+    printf("%-5s %-4s %-3s %-4s\n", 
+            "Line", "OP", "L", "M");
+    printf("------------------------------------------------------------\n");
+    for (int i = 0; i < codeIndex; i++) {
+        const char *op = opMnemonic(code[i].OP);
+        printf("%-5d %-4s %-3d %-4d\n",
+               i, op, code[i].L, code[i].M);
+    }
+}
+
+static void printTerminal(void) {
+    printAssembly();
+    printSymbolTable();
+}
+
+// Load tokens produced by lex.c from tokens.txt.
+// Format: <type> [<lexeme-if-ident-or-number>] repeated.
+static void loadTokensOrExit(void) {
+    FILE *f = fopen(TOKEN_FILE, "r");
+
+    totalToken = 0;
+    while (!feof(f) && totalToken < MAX_TOKENS) {
+        int tokenType;
+        if (fscanf(f, "%d", &tokenType) != 1) break;
+
+        tokens[totalToken].type = tokenType;
+        tokens[totalToken].lexeme[0] = '\0';
+
+        if (tokenType == identsym || tokenType == numbersym) {
+            fscanf(f, "%499s", tokens[totalToken].lexeme);
+        }
+    }
+        totalToken++;
+
+    fclose(f);
+
+    for (int i = 0; i < totalToken; i++) {
+        if (tokens[i].type == skipsym) 
+            exitAndPrint(0);
+    }
+}
+
+static void writeElf(void) {
+    FILE *out = fopen(ELF_FILE, "w");
+
+    for (int i = 0; i < codeIndex; i++) {
+        fprintf(out, "%d %d %d\n", code[i].OP, code[i].L, code[i].M);
+    }
+    fclose(out);
+}
+
+int main(void) {
+    loadTokensOrExit();
+    PROGRAM();
+    printTerminal();   // <-- terminal output including Symbol Table
+    writeElf();                 // <-- numeric code to elf.txt
     return 0;
 }
