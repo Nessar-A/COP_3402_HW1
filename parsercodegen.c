@@ -40,8 +40,115 @@ Due Date: Friday, October 31, 2025 at 11:59 PM ET
 */ 
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
-void printError(errorCode,output) {
+#define TOKEN_FILE "tokens.txt"
+#define ELF_FILE   "elf.txt"
+
+#define MAX_TOKENS 500
+#define MAX_CODE   10000                //
+#define MAX_SYMBOL_TABLE_SIZE   500
+
+// Enumeration of all possible token types for PL/0 language
+enum {
+    // Token Symbol    // Token Name             // Token Number
+
+    skipsym = 1,       // Skips or errors
+    identsym,          // Identifier             2
+    numbersym,         // Number                 3
+    plussym,           // +                      4
+    minussym,          // -                      5
+    multsym,           // *                      6
+    slashsym,          // /                      7
+    eqsym,             // =                      8
+    neqsym,            // <>                     9
+    lessym,            // <                      10
+    leqsym,            // <=                     11
+    gtrsym,            // >                      12
+    geqsym,            // >=                     13
+    lparentsym,        // (                      14
+    rparentsym,        // )                      15
+    commasym,          // ,                      16
+    semicolonsym,      // ;                      17
+    periodsym,         // .                      18
+    becomessym,        // :=                     19
+    beginsym,          // begin                  20
+    endsym,            // end                    21
+    ifsym,             // if                     22
+    fisym,             // fi                     23
+    thensym,           // then                   24
+    whilesym,          // while                  25
+    dosym,             // do                     26
+    callsym,           // call                   27
+    constsym,          // const                  28
+    varsym,            // var                     29
+    procsym,           // procedure              30
+    writesym,          // write                  31
+    readsym,           // read                   32
+    elsesym,           // else                   33
+    evensym,           // even                   34
+};
+
+typedef struct {
+    int OP;
+    int L;
+    int M
+} instruction;
+
+enum { 
+    OP_LIT = 1,
+    OP_OPR,
+    OP_LOD, 
+    OP_STO, 
+    OP_CAL, 
+    OP_INC, 
+    OP_JMP, 
+    OP_JPC, 
+    OP_SYS
+};
+
+enum {
+    OPR_RET,
+    OPR_ADD,
+    OPR_SUB,
+    OPR_MUL,
+    OPR_DIV,
+    OPR_EQL,
+    OPR_NEQ,
+    OPR_LSS,
+    OPR_LEQ,
+    OPR_GTR,
+    OPR_GEQ,
+    OPR_EVEN
+};
+
+typedef struct {
+    int type;
+    char lexeme[MAX_TOKENS];               
+} Token;
+
+static Token tokens[MAX_TOKENS];
+static int totalToken = 0, tokenIndex = 0;
+
+typedef struct {
+    int kind; // const = 1, var = 2, proc = 3
+    char name[12]; // name up to 11 chars
+    int val; // number (ASCII value)
+    int level; // L level
+    int addr; // M address
+    int mark; // to indicate unavailable or deleted
+} symbol;
+
+static symbol symbol_table[MAX_SYMBOL_TABLE_SIZE];
+static int totalSymbols = 0;
+
+static instruction code[MAX_CODE];          //Code buffer
+static int codeIndex  = 0;
+
+static FILE* fp = NULL;
+
+static void printError(int errorCode, FILE* output) {
     printf("Error: ");
     fprintf(output, "Error: ");
     if (errorCode == 0) {
@@ -58,10 +165,10 @@ void printError(errorCode,output) {
         fprintf(output,"symbol name has already been declared\n");
     } else if (errorCode == 4) {
         printf("constants must be assigned with =\n");
-        fprintf(output,"symbol name has already been declared\n");
+        fprintf(output,"constants must be assigned with =\n");
     } else if (errorCode == 5) {
         printf("constants must be assigned an integer value\n");
-        fprintf(output,"symbol name has already been declared\n");
+        fprintf(output,"constants must be assigned an integer value\n");
     } else if (errorCode == 6) {
         printf("constant and variable declarations must be followed by a semicolon\n");
         fprintf(output,"constant and variable declarations must be followed by a semicolon\n");
@@ -94,12 +201,151 @@ void printError(errorCode,output) {
         fprintf(output,"arithmetic equations must contain operands, parentheses, numbers, or symbols\n");
     }
 }
+
+static void exitAndPrint(int errorCode) {
+    if (!fp) 
+        fp = fopen(ELF_FILE, "w");
+
+    printError(errorCode, fp);
+
+    if (fp) {
+        fclose(fp);
+        fp = NULL;
+    }
+
+    exit(1);
+}
+
+static void emit(int OP, int L, int M) {
+    code[codeIndex].OP = OP;
+    code[codeIndex].L = L;
+    code[codeIndex].M = M;
+    codeIndex++;
+}
+/* ***********Next 6 functions are from ChatGPT ****************************/
+// Returns the next token's type, or 0 if we're out of tokens.
+static int peekType(void) {
+    if (tokenIndex < totalToken) {
+        return tokens[tokenIndex].type;
+    } else {
+        return 0;
+    }
+}
+
+// Consumes and returns a pointer to the next token, or NULL at end.
+static Token getTok(void) {
+    Token t;
+    if (tokenIndex < totalToken) {
+        t = tokens[tokenIndex];
+        tokenIndex++;;
+    } else {
+        t.type = 0;
+        t.lexeme[0] = '\0';
+    }
+    return t;
+}
+
+// If the next token matches 'type', consume it and return 1; otherwise return 0.
+static int accept(int type) {
+    if (peekType() == type) 
+      if (tokenIndex < totalToken)
+        tokenIndex++;
+}
+
+/* ============================================================
+   Symbol table ops (match Appendix E fields)
+   ============================================================ */
+static int SYMBOLTABLECHECK(const char *name) {
+    int i = totalSymbols - 1;
+    while (i >= 0) {
+        if (strcmp(symbol_table[i].name, name) == 0) return i;
+        i = i - 1;
+    }
+    return -1;
+}
+
+static void addConst(const char *name, int value) {
+    symbol s;
+    memset(&s, 0, sizeof(s));
+    s.kind = 1;
+    strncpy(s.name, name, sizeof(s.name)); s.name[sizeof(s.name)-1]='\0';
+    s.val = value;
+    s.level = 0;
+    s.addr = 0;
+    s.mark = 0;
+    symbol_table[totalSymbols++] = s;
+}
+
+static void addVar(const char *name, int addr) {
+    if (totalSymbols >= MAX_SYMBOL_TABLE_SIZE) die(15);
+    symbol s;
+    memset(&s, 0, sizeof(s));
+    s.kind = 2;
+    strncpy(s.name, name, sizeof(s.name)); s.name[sizeof(s.name)-1]='\0';
+    s.val = 0;
+    s.level = 0;
+    s.addr = addr;
+    s.mark = 0;
+    symbol_table[totalSymbols++] = s;
+}
+
+//Parser function prototypes
+static void PROGRAM();
+static void BLOCK();
+static void CONST_DECLARATION();
+static int  VAR_DECLARATION();
+static void STATEMENT();
+static void CONDITION();
+static void EXPRESSION();
+static void TERM();
+static void FACTOR();
+
+static void PROGRAM(){
+    BLOCK();
+    if (!accept(periodsym))
+        exitAndPrint(1);
+
+    emit(OP_SYS, 0, 3);
+}
+
+static void BLOCK() {
+    CONST_DECLARATION();
+    int numVars = VAR_DECLARATION();
+    emit(OP_INC, 0, 3 + numVars);
+    STATEMENT();
+}
+
+static void CONST_DECLARATION() {
+    if (accept(constsym)) {
+        do {
+            Token nextToken = getTok();
+            if (nextToken.type != identsym)
+                exitAndPrint(2);
+            
+            if(SYMBOLTABLECHECK(nextToken.lexeme) != -1)
+                exitAndPrint(3);
+
+            if(!accept(eqsym))
+                exitAndPrint(4);
+
+            Token numToken = getTok();
+            if (numToken.type != numbersym)
+                exitAndPrint(5);
+
+            addConst(nextToken.lexeme, atoi(nextToken.lexeme));
+         } while (accept(commasym));
+        
+         if (!accept(semicolonsym))
+            exitAndPrint(6);
+    }
+}
+
 int main() {
     FILE * input = fopen("input.txt","r");
     FILE * output = fopen("elf.txt", "w");
 
     if (input) {
-        printf("Successfully opened file.\n") // TEMPORARY
+        printf("Successfully opened file.\n"); // TEMPORARY
     } else {
         printf("Failed to open input file. Did you check the input file name?\n");
         return 0;
