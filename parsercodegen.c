@@ -222,6 +222,14 @@ static void emit(int OP, int L, int M) {
     code[codeIndex].M = M;
     codeIndex++;
 }
+// Returns the next token's type, or 0 if we're out of tokens.
+static int peekType(void) {
+    if (tokenIndex < totalToken) {
+        return tokens[tokenIndex].type;
+    } else {
+        return 0;
+    }
+}
 
 // Consumes and returns the next token
 static Token getToken(void) {
@@ -235,14 +243,6 @@ static Token getToken(void) {
     }
     return t;
 }
-// Returns the next token's type, or 0 if we're out of tokens.
-static int peekType(void) {
-    if (tokenIndex < totalToken) {
-        return tokens[tokenIndex].type;
-    } else {
-        return 0;
-    }
-}
 
 // If the next token matches 'type', consume it and return 1; otherwise return 0.
 static int accept(int type) {
@@ -254,7 +254,12 @@ static int accept(int type) {
     return 0;
 }
 
-//Symbol table ops
+//Word address
+static inline int targetAddr(int instrIndex) {
+    return instrIndex * 3;
+}
+
+//Symbol table ops (match Appendix E fields)
 
 static int SYMBOLTABLECHECK(const char *name) {
     int i = totalSymbols - 1;
@@ -408,7 +413,7 @@ static void STATEMENT() {
         if(!accept(fisym))
             exitAndPrint(10);
         
-        code[jpcIdx].M = codeIndex;
+        code[jpcIdx].M = targetAddr(codeIndex);
         return;
     }
 
@@ -421,8 +426,8 @@ static void STATEMENT() {
         int jpcIdx = codeIndex;
         emit(OP_JPC, 0, 0);
         STATEMENT();
-        emit(OP_JMP, 0, loopIdx);
-        code[jpcIdx].M = codeIndex;
+        emit(OP_JMP, 0, targetAddr(loopIdx));
+        code[jpcIdx].M = targetAddr(codeIndex);
         return;
     }
 
@@ -566,13 +571,13 @@ static const char* opMnemonic(int op) {
 }
 
 static void printSymbolTable(void) {
-    printf("\nSymbol Table: |n\n");
+    printf("\nSymbol Table: \n\n");
     printf("%-7s | %-12s | %-8s | %-7s | %-7s | %-5s\n",
             "Kind", "Name", "Val", "Level", "Addr", "Mark");
     printf("------------------------------------------------------------\n");
     for (int i = 0; i < totalSymbols; i++) {
         printf("%-7d | %-12s | %-8d | %-7d | %-7d | %-5d\n",
-               symbol_table[i].kind,          
+               symbol_table[i].kind,           // <-- integer kind (1/2/3)
                symbol_table[i].name,
                symbol_table[i].val,
                symbol_table[i].level,
@@ -598,10 +603,13 @@ static void printTerminal(void) {
     printSymbolTable();
 }
 
-// Load tokens produced by lex.c from tokens.txt.
-// Format: <type> [<lexeme-if-ident-or-number>] repeated.
+
 static void loadTokensOrExit(void) {
     FILE *f = fopen(TOKEN_FILE, "r");
+    if (!f) {
+        fprintf(stderr, "Cannot open %s\n", TOKEN_FILE);
+        exit(1);
+    }
 
     totalToken = 0;
     while (!feof(f) && totalToken < MAX_TOKENS) {
@@ -612,22 +620,26 @@ static void loadTokensOrExit(void) {
         tokens[totalToken].lexeme[0] = '\0';
 
         if (tokenType == identsym || tokenType == numbersym) {
-            fscanf(f, "%499s", tokens[totalToken].lexeme);
+            if (fscanf(f, "%499s", tokens[totalToken].lexeme) != 1) {
+                fclose(f);
+                exitAndPrint(15);
+            }
         }
-    }
         totalToken++;
-
+    }
     fclose(f);
 
     for (int i = 0; i < totalToken; i++) {
-        if (tokens[i].type == skipsym) 
-            exitAndPrint(0);
+        if (tokens[i].type == skipsym) exitAndPrint(0);
     }
 }
 
 static void writeElf(void) {
     FILE *out = fopen(ELF_FILE, "w");
-
+    if (!out) {
+        fprintf(stderr, "Cannot open %s for write\n", ELF_FILE);
+        exit(1);
+    }
     for (int i = 0; i < codeIndex; i++) {
         fprintf(out, "%d %d %d\n", code[i].OP, code[i].L, code[i].M);
     }
@@ -637,7 +649,7 @@ static void writeElf(void) {
 int main(void) {
     loadTokensOrExit();
     PROGRAM();
-    printTerminal();   // <-- terminal output including Symbol Table
-    writeElf();                 // <-- numeric code to elf.txt
+    printTerminal();  
+    writeElf();               
     return 0;
 }
