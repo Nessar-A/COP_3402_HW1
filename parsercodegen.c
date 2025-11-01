@@ -93,7 +93,7 @@ enum {
 typedef struct {
     int OP;
     int L;
-    int M
+    int M;
 } instruction;
 
 enum { 
@@ -232,12 +232,12 @@ static int peekType(void) {
     }
 }
 
-// Consumes and returns a pointer to the next token, or NULL at end.
-static Token getTok(void) {
+// Consumes and returns the next token
+static Token getToken(void) {
     Token t;
     if (tokenIndex < totalToken) {
         t = tokens[tokenIndex];
-        tokenIndex++;;
+        tokenIndex++;
     } else {
         t.type = 0;
         t.lexeme[0] = '\0';
@@ -247,9 +247,12 @@ static Token getTok(void) {
 
 // If the next token matches 'type', consume it and return 1; otherwise return 0.
 static int accept(int type) {
-    if (peekType() == type) 
-      if (tokenIndex < totalToken)
-        tokenIndex++;
+    if (peekType() == type) {
+        if (tokenIndex < totalToken)
+            tokenIndex++;
+        return 1;
+    }
+    return 0;
 }
 
 /* ============================================================
@@ -268,7 +271,8 @@ static void addConst(const char *name, int value) {
     symbol s;
     memset(&s, 0, sizeof(s));
     s.kind = 1;
-    strncpy(s.name, name, sizeof(s.name)); s.name[sizeof(s.name)-1]='\0';
+    strncpy(s.name, name, sizeof(s.name)); 
+    s.name[sizeof(s.name)-1]='\0';
     s.val = value;
     s.level = 0;
     s.addr = 0;
@@ -277,7 +281,6 @@ static void addConst(const char *name, int value) {
 }
 
 static void addVar(const char *name, int addr) {
-    if (totalSymbols >= MAX_SYMBOL_TABLE_SIZE) die(15);
     symbol s;
     memset(&s, 0, sizeof(s));
     s.kind = 2;
@@ -318,21 +321,21 @@ static void BLOCK() {
 static void CONST_DECLARATION() {
     if (accept(constsym)) {
         do {
-            Token nextToken = getTok();
-            if (nextToken.type != identsym)
+            Token token = getToken();
+            if (token.type != identsym)
                 exitAndPrint(2);
             
-            if(SYMBOLTABLECHECK(nextToken.lexeme) != -1)
+            if(SYMBOLTABLECHECK(token.lexeme) != -1)
                 exitAndPrint(3);
 
             if(!accept(eqsym))
                 exitAndPrint(4);
 
-            Token numToken = getTok();
+            Token numToken = getToken();
             if (numToken.type != numbersym)
                 exitAndPrint(5);
 
-            addConst(nextToken.lexeme, atoi(nextToken.lexeme));
+            addConst(token.lexeme, atoi(numToken.lexeme));
          } while (accept(commasym));
         
          if (!accept(semicolonsym))
@@ -340,6 +343,89 @@ static void CONST_DECLARATION() {
     }
 }
 
+static int VAR_DECLARATION() {
+    int numVars = 0;
+    if(accept(varsym)) {
+        do {
+
+            numVars++;
+            Token token = getToken();
+            if (token.type != identsym)
+                exitAndPrint(2);
+            
+            if(SYMBOLTABLECHECK(token.lexeme) != -1)
+                exitAndPrint(3);
+
+            addVar(token.lexeme, 3 + (numVars - 1));
+        } while (accept(commasym));
+
+        if(!accept(semicolonsym))
+            exitAndPrint(6);
+    }
+
+    return numVars;
+}
+
+static void EXPRESSION() {
+    TERM();
+
+    while(1) {
+        if (accept(plussym)) {
+            TERM();
+            emit(OP_OPR, 0, OPR_ADD);
+        } else if (accept(minussym)) {
+            TERM();
+            emit(OP_OPR, 0, OPR_SUB);
+        } else {
+            break;
+        }
+    }
+}
+
+static void TERM() {
+    FACTOR();
+    while (peekType() == multsym || peekType() == slashsym) {
+        if (accept(multsym)) {
+            FACTOR();
+            emit(OP_OPR, 0, OPR_MUL);
+        } else if (accept(slashsym)) {
+            FACTOR();
+            emit(OP_OPR, 0, OPR_DIV);
+        }
+    }
+}
+
+static void FACTOR() {
+    int temp = peekType();
+
+    if (temp == identsym) {
+        Token token = getToken();
+        int symIdx = SYMBOLTABLECHECK(token.lexeme);
+        if (symIdx == -1)
+            exitAndPrint(7);
+
+        symbol_table[symIdx].mark = 1;
+        if (symbol_table[symIdx].kind == 1)
+            emit (OP_LIT, 0, symbol_table[symIdx].val);
+        else
+            emit(OP_LOD, 0, symbol_table[symIdx].addr);
+        return;
+    }
+
+    if (temp == numbersym) {
+        Token numToken = getToken();
+        emit(OP_LIT, 0, atoi(numToken.lexeme));
+        return;
+    }
+
+    if (accept(lparentsym)) {
+        EXPRESSION();
+        if(!accept(rparentsym))
+            exitAndPrint(14);
+        return;
+    }
+    exitAndPrint(15);
+}
 int main() {
     FILE * input = fopen("input.txt","r");
     FILE * output = fopen("elf.txt", "w");
