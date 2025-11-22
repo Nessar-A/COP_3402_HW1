@@ -2,314 +2,313 @@
 Assignment:
 HW4 - Complete Parser and Code Generator for PL/0
       (with Procedures, Call, and Else)
-
 Author(s): Nessar Amiri, Marcelo Pacheco
 
 Language: C (only)
 
 To Compile:
-    Scanner:
-        gcc -O2 -std=c11 -o lex lex.c
-    Parser/Code Generator:
-        gcc -O2 -std=c11 -o parsercodegen_complete parsercodegen_complete.c
-    Virtual Machine:
-    gcc -O2 -std=c11 -o vm.vm.c
-    To Execute (on Eustis):
-        ./lex <input_file.txt>
-        ./parsercodegen
+  Scanner:
+    gcc -O2 -std=c11 -o lex lex.c
+  Parser/Code Generator:
+    gcc -O2 -std=c11 -o parsercodegen_complete parsercodegen_complete.c
+  Virtual Machine:
+    gcc -O2 -std=c11 -o vm vm.c
+
+To Execute (on Eustis):
+  ./lex <input_file.txt>
+  ./parsercodegen_complete
+  ./vm elf.txt
 
 where:
-    <input_file.txt> is the path to the PL/0 source program
+<input_file.txt> is the path to the PL/0 source program
 
 Notes:
-    - lex.c accepts ONE command-line argument (input PL/0 source file)
-    - parsercodegen.c accepts NO command-line arguments
-    - Input filename is hard-coded in parsercodegen.c
-    - Implements recursive-descent parser for PL/0 grammar
-    - Generates PM/0 assembly code (see Appendix A for ISA)
-    - All development and testing performed on Eustis
+  - lex.c accepts ONE command-line argument (input PL/0 source file)
+  - parsercodegen_complete.c accepts NO command-line arguments
+  - Input filename is hard-coded in parsercodegen_complete.c
+  - Implements recursive-descent parser for extended PL/0 grammar
+  - Supports procedures, call statements, and if-then-else
+  - Generates PM/0 assembly code (see Appendix A for ISA)
+  - VM must support EVEN instruction (OPR 0 11)
+  - All development and testing performed on Eustis
 
 Class: COP3402 - System Software - Fall 2025
 
 Instructor: Dr. Jie Lin
 
-Due Date: Friday, October 31, 2025 at 11:59 PM ET
+Due Date: Friday, November 21, 2025 at 11:59 PM ET
 */
 
 #include <stdio.h>
 #include <stdlib.h>
 
-// defines variables
 #define PAS_SIZE 500
-int pas[PAS_SIZE] = {0};
-int PC, BP, SP;
+#define MAX_BARS  200
 
-// defines IR struct
-struct InstructionRegister {
+/* ===== Globals (per instructor note) ===== */
+int PAS[PAS_SIZE] = {0};   /* unified PAS: text (top, downward) + stack (downward) */
+int PC = 0, BP = 0, SP = 0;
+
+/* Instruction register (expanded form to avoid typedef issues) */
+struct instruction {
     int OP;
     int L;
     int M;
 };
+typedef struct instruction instruction;
+instruction IR;
 
-// defines function prototypes
-int base(int BP, int L);
-void printStack(int BP, int SP);
+/* For activation-record separators (store SP at time of CAL) */
+int bars[MAX_BARS];
+int bar_count = 0;
 
-// main
-int main(int argc, char * argv[]) {
+/* Highest stack address currently visible for printing (inclusive). */
+int stack_hi = -1;
 
-    if (argc != 2) {
-        fprintf(stderr, "This program only accepts one argument\n");
-        return 0;
-    }
+/* Track whether we've already printed the very first JMP (which omits stack) */
+int first_jmp_printed = 0;
 
-    // reads input and opens
-    FILE * fp = fopen(argv[1], "r");
-
-    struct InstructionRegister IR; // sets up struct
-
-    // if unable to find file, terminates program
-    if (fp == NULL) {
-        printf("Unable to open file.\n");
-        return 0;
-    }
-
-    // temp variables
-    int op, l, m;
-    int index = PAS_SIZE - 1;
-    int lastLoadedM = index;
-
-    // reads input and assigns to pas
-    while (fscanf(fp, "%d %d %d", &op, &l, &m) == 3) {
-        pas[index] = op;
-        pas[index - 1] = l;
-        pas[index - 2] = m;
-        lastLoadedM = index - 2;
-        index -= 3;
-    }
-
-    fclose(fp); // closes file
-
-    //initialize the registers
-    PC = PAS_SIZE - 1;
-    SP = lastLoadedM; // last loaded M address
-    BP = SP - 1;
-
-    int flag = 0; // flag for halt operation
-
-    printf("        L       M    PC   BP   SP   stack\n");
-    printf("Initial values:      %d  %d  %d\n", PC, BP, SP);
-
-    while (flag == 0) {
-        // fetch cycle
-        IR.OP = pas[PC];
-        IR.L = pas[PC - 1];
-        IR.M = pas[PC - 2];
-        PC -= 3;
-        switch (IR.OP)
-        {
-        case 1: // LIT
-            SP--;
-            pas[SP] = IR.M;
-            printf("LIT     ");
-            break;
-        
-        case 2: // OPR
-            switch (IR.M)
-            {
-            case 0: // RTN
-                SP = BP + 1;
-                BP = pas[SP - 2];
-                PC = pas[SP - 3];
-                printf("RTN     ");
-                break;
-
-            case 1: // ADD
-                pas[SP + 1] = pas[SP + 1] + pas[SP];
-                SP++;
-                printf("ADD     ");
-                break;
-            
-            case 2: // SUB
-                pas[SP + 1] = pas[SP + 1] - pas[SP];
-                SP++;
-                printf("SUB     ");
-                break;
-
-            case 3: // MUL
-                pas[SP + 1] = pas[SP + 1] * pas[SP];
-                SP++;
-                printf("MUL     ");
-                break;
-            
-            case 4: // DIV
-                pas[SP + 1] = pas[SP + 1] / pas[SP];
-                SP++;
-                printf("DIV     ");
-                break;
-
-            case 5: // EQL
-                if (pas[SP + 1] == pas[SP])
-                    pas[SP + 1] = 1;
-                else
-                    pas[SP + 1] = 0;
-                SP++;
-                printf("EQL     ");
-                break;
-            
-            case 6: // NEQ
-                if (pas[SP + 1] != pas[SP])
-                        pas[SP + 1] = 1;
-                    else
-                        pas[SP + 1] = 0;
-                    SP++;
-                    printf("NEQ     ");
-                    break;
-
-            case 7: // LSS  
-                if (pas[SP + 1] < pas[SP])
-                    pas[SP + 1] = 1;
-                else
-                    pas[SP + 1] = 0;
-                SP++;
-                printf("LSS     ");
-                break;
-
-            case 8: // LEQ
-                if (pas[SP + 1] <= pas[SP])
-                    pas[SP + 1] = 1;
-                else
-                    pas[SP + 1] = 0;
-                SP++;
-                printf("LEQ     ");
-                break;
-
-            case 9: // GTR
-                if (pas[SP + 1] > pas[SP])
-                    pas[SP + 1] = 1;
-                else
-                    pas[SP + 1] = 0;
-                SP++;
-                printf("GTR     ");
-                break;
-
-            case 10: // GEQ
-                if (pas[SP + 1] >= pas[SP])
-                    pas[SP + 1] = 1;
-                else
-                    pas[SP + 1] = 0;
-                SP++;
-                printf("GEQ     ");
-                break;
-            case 11: // EVEN
-                if (pas[SP] % 2 == 0)
-                    pas[SP + 1] = 1;
-                else
-                    pas[SP + 1] = 0;
-                printf("EVEN     ");
-                break;
-            default:
-                fprintf(stderr, "%d is an unknown OPR\n", IR.M);
-                return 0;
-            }
-            break;
-
-        case 3: // LOD
-            SP--;
-            pas[SP] = pas[base(BP, IR.L) - IR.M];
-            printf("LOD     ");
-            break;
-
-        case 4: // STO
-            pas[base(BP, IR.L) - IR.M] = pas[SP];
-            SP++;
-            printf("STO     ");
-            break;
-
-        case 5: // CAL
-            pas[SP - 1] = base(BP, IR.L);
-            pas[SP - 2] = BP;
-            pas[SP - 3] = PC;
-            BP = SP - 1;
-            PC = (PAS_SIZE - 1) - IR.M;
-            printf("CAL     ");
-            break;
-
-        case 6: // INC
-            SP -= IR.M;
-            printf("INC     ");
-            break;
-
-        case 7: // JMP
-            PC = (PAS_SIZE - 1) - IR.M;
-            printf("JMP     ");
-            break;
-
-        case 8:  // JPC
-            if(pas[SP] == 0)
-                PC = (PAS_SIZE - 1) - IR.M;
-            SP++;
-            printf("JPC     ");
-            break;
-        
-        case 9: // SYS
-            switch(IR.M) {
-                case 1: // SYS 0 1
-                    printf("Output result is: %d\n", pas[SP]);
-                    SP++;
-                    printf("SYS     ");
-                    break;
-                
-                case 2: // SYS 0 2
-                    int val;
-                    printf("Please Enter an Integer: ");
-                    scanf("%d", &val);
-                    SP--;
-                    printf("SYS     ");
-                    pas[SP] = val;
-                    break;
-
-                case 3: // SYS 0 3
-                    flag = 1;
-                    printf("SYS     ");
-                    break;
-            }
-            break;
-        }
-        // prints line
-        printf("%d       %d    %d  %d  %d  ", IR.L, IR.M, PC, BP, SP); // prints L, M, PC, BP, and SP
-        printStack(BP, SP); // prints the stack
-        printf("\n"); // prints new-line
-    }
-
-    return 0;
-}
-
-int base(int BP, int L) {
-    int arb = BP;
-    
+/* Follow static link L levels (SL lives at PAS[BP]) */
+int base(int BPval, int L) {
+    int arb = BPval;
     while (L > 0) {
-        arb = pas[arb];
+        arb = PAS[arb]; /* SL */
         L--;
     }
-    
     return arb;
 }
 
-void printStack(int BP, int SP) {
-    if (pas[BP] != 0) { // recursively call if it's not equal to 0
-        printStack(pas[BP], BP + 1);
+/* Print the stack from high to low (descending) with bars only if there are values to the right. */
+void print_stack_desc(void) {
+    int bar_idx = 0;
+    for (int i = stack_hi; i >= SP; --i) {
+        printf(" %d", PAS[i]);
+        /* Print a '|' only if this bar position is NOT the very last printed element.
+           (Avoid trailing bar on CAL line before INC.) */
+        if (bar_idx < bar_count && i == bars[bar_idx] && i > SP) {
+            printf(" |");
+            bar_idx++;
+        }
+    }
+}
+
+int main(int argc, char *argv[]) {
+    if (argc != 2) {
+        fprintf(stderr, "Error: expected exactly one argument (input file)\n");
+        return 1;
     }
 
-    if (BP > SP) {
-        if (pas[BP] != 0) {
-            printf("| ");
-        }
-        
-        // loop to display stack
-        for (int i = BP; i >= SP; i--) {
-            printf("%d ", pas[i]);
+    /* ===== Load program into PAS, from 499 downward in triples (OP,L,M) ===== */
+    FILE *f = fopen(argv[1], "r");
+    if (!f) { perror("Unable to open input file"); return 1; }
+
+    int op, L, M;
+    int store = PAS_SIZE - 1; /* 499 */
+    int lowest_used = store;
+    int triples = 0;
+
+    while (fscanf(f, "%d %d %d", &op, &L, &M) == 3) {
+        if (store < 2) { fprintf(stderr, "Error: program too large for PAS\n"); fclose(f); return 1; }
+        PAS[store] = op;     /* OP */
+        PAS[store - 1] = L;  /* L  */
+        PAS[store - 2] = M;  /* M  */
+        lowest_used = store - 2;
+        store -= 3;
+        triples++;
+    }
+    fclose(f);
+    if (triples == 0) { fprintf(stderr, "Error: no instructions loaded\n"); return 1; }
+
+    /* ===== Init registers per spec ===== */
+    PC = PAS_SIZE - 1; /* 499 */
+    SP = lowest_used;  /* address of last M loaded */
+    BP = SP - 1;
+    stack_hi = SP - 1; /* nothing on stack yet */
+
+    /* Header + initial line (exact phrasing/spaces) */
+    printf("L M PC BP SP stack\n");
+    printf("Initial values : %d %d %d\n", PC, BP, SP);
+
+    int running = 1;
+
+    while (running) {
+        /* ===== FETCH ===== */
+        IR.OP = PAS[PC];
+        IR.L  = PAS[PC - 1];
+        IR.M  = PAS[PC - 2];
+        PC -= 3;
+
+        switch (IR.OP) {
+            case 1: { /* LIT 0 M : push literal */
+                SP--;
+                PAS[SP] = IR.M;
+                if (stack_hi < SP) stack_hi = SP;
+                printf("LIT %d %d %d %d %d", IR.L, IR.M, PC, BP, SP);
+                print_stack_desc();
+                printf("\n");
+                break;
+            }
+
+            case 2: { /* OPR 0 M : operations / return */
+                if (IR.M == 0) { /* RTN */
+                    /* Use DL/RA from the current AR:
+                       RA at PAS[BP - 2], DL at PAS[BP - 1].
+                       Then set SP <- oldBP + 1, BP <- DL, PC <- RA.
+                    */
+                    int oldBP = BP;
+                    int RA = PAS[oldBP - 2];
+                    int DL = PAS[oldBP - 1];
+                    SP = oldBP + 1;
+                    BP = DL;
+                    PC = RA;
+                    if (bar_count > 0) bar_count--;
+                    /* Do not shrink stack_hi (keep caller's previous contents visible) */
+                    printf("RTN %d %d %d %d %d", IR.L, IR.M, PC, BP, SP);
+                    print_stack_desc();
+                    printf("\n");
+                } else {
+                    const char *mn = "";
+                    switch (IR.M) {
+                        case 1: PAS[SP+1] = PAS[SP+1] + PAS[SP]; SP++; mn = "ADD"; break;
+                        case 2: PAS[SP+1] = PAS[SP+1] - PAS[SP]; SP++; mn = "SUB"; break;
+                        case 3: PAS[SP+1] = PAS[SP+1] * PAS[SP]; SP++; mn = "MUL"; break;
+                        case 4: PAS[SP+1] = PAS[SP+1] / PAS[SP]; SP++; mn = "DIV"; break;
+                        case 5: PAS[SP+1] = (PAS[SP+1] == PAS[SP]) ? 1 : 0; SP++; mn = "EQL"; break;
+                        case 6: PAS[SP+1] = (PAS[SP+1] != PAS[SP]) ? 1 : 0; SP++; mn = "NEQ"; break;
+                        case 7: PAS[SP+1] = (PAS[SP+1] <  PAS[SP]) ? 1 : 0; SP++; mn = "LSS"; break;
+                        case 8: PAS[SP+1] = (PAS[SP+1] <= PAS[SP]) ? 1 : 0; SP++; mn = "LEQ"; break;
+                        case 9: PAS[SP+1] = (PAS[SP+1] >  PAS[SP]) ? 1 : 0; SP++; mn = "GTR"; break;
+                        case 10: PAS[SP+1] = (PAS[SP+1] >= PAS[SP]) ? 1 : 0; SP++; mn = "GEQ"; break;
+                        case 11: PAS[SP] = (PAS[SP] % 2 == 0) ? 1 : 0; mn = "EVEN"; break; 
+                        default: fprintf(stderr, "Runtime Error: unknown OPR %d\n", IR.M); return 1;
+                    }
+                    if (stack_hi < SP) stack_hi = SP;
+                    printf("%s %d %d %d %d %d", mn, IR.L, IR.M, PC, BP, SP);
+                    print_stack_desc();
+                    printf("\n");
+                }
+                break;
+            }
+
+            case 3: { /* LOD L M : push value from base(BP,L)-M */
+                SP--;
+                PAS[SP] = PAS[ base(BP, IR.L) - IR.M ];
+                if (stack_hi < SP) stack_hi = SP;
+                printf("LOD %d %d %d %d %d", IR.L, IR.M, PC, BP, SP);
+                print_stack_desc();
+                printf("\n");
+                break;
+            }
+
+            case 4: { /* STO L M : store top into base(BP,L)-M ; pop */
+                PAS[ base(BP, IR.L) - IR.M ] = PAS[SP];
+                SP++;
+                printf("STO %d %d %d %d %d", IR.L, IR.M, PC, BP, SP);
+                print_stack_desc();
+                printf("\n");
+                break;
+            }
+
+            case 5: { /* CAL L M : call procedure at code address M */
+                /* Create AR: SL, DL, RA (do NOT change SP here) */
+                PAS[SP - 1] = base(BP, IR.L); /* SL at BP after update */
+                PAS[SP - 2] = BP;             /* DL */
+                PAS[SP - 3] = PC;             /* RA */
+                BP = SP - 1;
+                PC = (PAS_SIZE - 1) - IR.M;   /* address encoding */
+                /* Mark the boundary between future locals and these links */
+                if (bar_count < MAX_BARS) bars[bar_count++] = SP;
+                /* For CAL line, show current stack up through SP only (no AR yet) */
+                if (stack_hi < SP) stack_hi = SP;
+                printf("CAL %d %d %d %d %d", IR.L, IR.M, PC, BP, SP);
+                print_stack_desc(); /* no trailing bar because we suppress bar at i == SP */
+                printf("\n");
+                break;
+            }
+
+            case 6: { /* INC 0 M : allocate M locals (zero them without touching SL/DL/RA) */
+                int oldSP = SP;
+                SP -= IR.M;
+
+                /* Locals live at indices [SP .. BP-3]. Never overwrite SL (BP), DL (BP-1), RA (BP-2). */
+                int locals_hi = BP - 3;
+                if (locals_hi >= SP) {
+                    for (int i = SP; i <= locals_hi; ++i) PAS[i] = 0;
+                }
+
+                /* After INC, include links too so bar becomes visible */
+                if (stack_hi < BP) stack_hi = BP;
+
+                printf("INC %d %d %d %d %d", IR.L, IR.M, PC, BP, SP);
+                print_stack_desc();
+                printf("\n");
+                break;
+            }
+
+            case 7: { /* JMP 0 M : jump to address */
+                PC = (PAS_SIZE - 1) - IR.M;
+                if (!first_jmp_printed) {
+                    /* First JMP (at program start) prints registers only */
+                    printf("JMP %d %d %d %d %d\n", IR.L, IR.M, PC, BP, SP);
+                    first_jmp_printed = 1;
+                } else {
+                    /* Subsequent JMPs print stack as well */
+                    printf("JMP %d %d %d %d %d", IR.L, IR.M, PC, BP, SP);
+                    print_stack_desc();
+                    printf("\n");
+                }
+                break;
+            }
+
+            case 8: { /* JPC 0 M : conditional jump if top==0 ; pop */
+                if (PAS[SP] == 0) PC = (PAS_SIZE - 1) - IR.M;
+                SP++;
+                printf("JPC %d %d %d %d %d", IR.L, IR.M, PC, BP, SP);
+                print_stack_desc();
+                printf("\n");
+                break;
+            }
+
+            case 9: { /* SYS 0 M */
+                if (IR.M == 1) {
+                    /* Output then pop */
+                    printf("Output result is : %d\n", PAS[SP]);
+                    SP++;
+                    printf("SYS %d %d %d %d %d", IR.L, IR.M, PC, BP, SP);
+                    print_stack_desc();
+                    printf("\n");
+                } else if (IR.M == 2) {
+                    /* Read integer from user (type 8 to match your golden trace) */
+                    int val;
+                    printf("Please Enter an Integer : ");
+                    fflush(stdout);
+                    if (scanf("%d", &val) != 1) {
+                        fprintf(stderr, "Input error\n");
+                        return 1;
+                    }
+                    SP--;
+                    PAS[SP] = val;
+                    if (stack_hi < SP) stack_hi = SP;
+                    printf("SYS %d %d %d %d %d", IR.L, IR.M, PC, BP, SP);
+                    print_stack_desc();
+                    printf("\n");
+                } else if (IR.M == 3) {
+                    printf("SYS %d %d %d %d %d", IR.L, IR.M, PC, BP, SP);
+                    print_stack_desc();
+                    printf("\n");
+                    running = 0;
+                } else {
+                    fprintf(stderr, "Runtime Error: unknown SYS %d\n", IR.M);
+                    return 1;
+                }
+                break;
+            }
+
+            default:
+                fprintf(stderr, "Runtime Error: unknown opcode %d\n", IR.OP);
+                return 1;
         }
     }
-    
+
+    return 0;
 }
